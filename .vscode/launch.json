@@ -15,7 +15,7 @@
                 "CUDA_VISIBLE_DEVICES": "0"
                 },
             "args": [
-              "--modality=cross_modal",
+              "--modality=cross_modal",   //regularization
               "--classifier_head=linear",
               "--classifier_init=zeroshot",
               "--logit=4.60517",

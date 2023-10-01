@@ -385,7 +385,7 @@ def main(args):
 
                     # Create the logreg model
                     image_encoder = torch.load(
-                        image_encoder_path).partial_model.train().cuda()        #TODO check the model class
+                        image_encoder_path).partial_model.train().cuda()        
                     text_encoder = torch.load(
                         text_encoder_path).partial_model.train().cuda()
                     head, num_classes, in_features = make_classifier_head(
@@ -420,7 +420,12 @@ def main(args):
                         text_batch_size = int(batch_size * CROSS_MODAL_BATCH_RATIO)
                     elif args.modality == "uni_modal":
                         text_batch_size = 0
-                    image_batch_size = batch_size - text_batch_size
+                    elif args.modality == "regularization":
+                        text_batch_size = num_classes
+                    if args.modality != "regularization":
+                        image_batch_size = batch_size - text_batch_size
+                    else:
+                        image_batch_size = batch_size
 
                     text_loader = None
                     if text_batch_size > 0:
