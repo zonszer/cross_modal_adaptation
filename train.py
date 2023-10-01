@@ -8,7 +8,7 @@ from engine.config import parser
 
 from engine.tools.utils import makedirs, set_random_seed
 from engine.datasets.utils import TensorDataset, TextTensorDataset
-from engine.model.head import make_classifier_head, get_zero_shot_weights
+from engine.model.head import make_classifier_head, get_zero_shot_weights, make_classifier_head_refine, make_classifier_model
 from engine.model.logit import LogitHead
 from engine.optimizer.default import HYPER_DICT
 from engine.optimizer.optim import build_optimizer
@@ -412,17 +412,15 @@ def main(args):
                             image_encoder_path).partial_model.train().cuda()        
                         text_encoder = torch.load(
                             text_encoder_path).partial_model.train().cuda()
-                        head, num_classes, in_features = make_classifier_head(
-                            args.classifier_head,
+                        
+                        logit_head, num_classes, in_features = make_classifier_model(args.classifier_head,
                             args.clip_encoder,
                             args.classifier_init,
                             text_dataset,
-                            text_encoder
+                            text_encoder,
+                            args.logit, args.modality,
                         )
-                        logit_head = LogitHead(
-                            head,
-                            logit_scale=args.logit,
-                        ).train().cuda()
+
                         # Create the optimizer
                         params_groups = [
                             {'params': logit_head.parameters()},
@@ -496,20 +494,15 @@ def main(args):
                         test_result_dict['test_accs'] = {}
 
                         # Create the logreg model and load the weights:
-                        head, num_classes, in_features = make_classifier_head(
-                            args.classifier_head,
+                        old_logit_head, num_classes, in_features = make_classifier_model(args.classifier_head,
                             args.clip_encoder,
                             args.classifier_init,
                             text_dataset,
                             text_encoder,
-                            bias=False
+                            args.logit, args.modality,
                         )
-                        old_logit_head = LogitHead(
-                            head,
-                            logit_scale=args.logit,
-                        )
-                        old_logit_head.load_state_dict(result_dict['logit_head'])
 
+                        old_logit_head.load_state_dict(result_dict['logit_head'])
                         image_encoder = torch.load(image_encoder_path).partial_model
                         image_encoder.load_state_dict(result_dict['image_encoder'])
                         image_encoder = image_encoder.cuda().eval()

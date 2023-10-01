@@ -10,7 +10,7 @@ from engine.transforms.default import build_transform
 from engine.tools.utils import makedirs, set_random_seed
 from engine import clip
 from engine.datasets.utils import TensorDataset, TextTensorDataset, get_label_map, get_testset
-from engine.model.head import make_classifier_head, get_zero_shot_weights
+from engine.model.head import make_classifier_head, get_zero_shot_weights, make_classifier_model
 from engine.model.logit import LogitHead
 from engine.optimizer.default import HYPER_DICT
 from engine.optimizer.optim import build_optimizer
@@ -212,20 +212,18 @@ def main(args):
                     # train logreg
 
                     # Create the logreg model
-                    head, num_classes, in_features = make_classifier_head(
-                        args.classifier_head,
-                        args.clip_encoder,
-                        args.classifier_init,
-                        text_dataset
-                    )
-                    logit_head = LogitHead(
-                        head,
-                        logit_scale=args.logit,
-                    ).train().cuda()
                     image_encoder = torch.load(
                         image_encoder_path).partial_model.train().cuda()
                     text_encoder = torch.load(
                         text_encoder_path).partial_model.train().cuda()
+                    
+                    logit_head, num_classes, in_features = make_classifier_model(args.classifier_head,
+                        args.clip_encoder,
+                        args.classifier_init,
+                        text_dataset,
+                        text_encoder,
+                        args.logit, args.modality,
+                    )
                     # Create the optimizer
                     params_groups = [
                         {'params': logit_head.parameters()},
@@ -290,16 +288,12 @@ def main(args):
                     test_result_dict['domain_shift_accs'] = {}
 
                     # Create the logreg model and load the weights
-                    head, num_classes, in_features = make_classifier_head(
-                        args.classifier_head,
+                    old_logit_head, num_classes, in_features = make_classifier_model(args.classifier_head,
                         args.clip_encoder,
                         args.classifier_init,
                         text_dataset,
-                        bias=False
-                    )
-                    old_logit_head = LogitHead(
-                        head,
-                        logit_scale=args.logit,
+                        text_encoder,
+                        args.logit, args.modality,
                     )
                     old_logit_head.load_state_dict(result_dict['logit_head'])
 

@@ -9,7 +9,7 @@ import numpy as np
 from engine.tools.utils import makedirs, set_random_seed
 from engine.config import default
 from engine.datasets.utils import TensorDataset
-from engine.model.head import make_classifier_head
+from engine.model.head import make_classifier_head, make_classifier_model
 from engine.model.logit import LogitHead
 from engine.optimizer.optim import build_optimizer
 from engine.optimizer.scheduler import build_lr_scheduler
@@ -197,16 +197,14 @@ def validate(logit_head, val_loader, device="cuda"):
 
 def evaluate(clip_encoder, classifier_head, logit, zero_shot_dataset, test_dataset):
     # Create the zero-shot model and evaluate test accuracy
-    head, _, _ = make_classifier_head(
-        classifier_head,
+    eval_head, _, _= make_classifier_model(classifier_head,
         clip_encoder,
-        "zeroshot", # meaning zero-shot initialization here
-        zero_shot_dataset
+        'zeroshot',
+        zero_shot_dataset,
+        logit=logit,
+        text_encoder=None,      #HACK there are 2 random values 
+        modality='',
     )
-    eval_head = LogitHead(
-        head,
-        logit_scale=logit
-    ).cuda().eval()
 
     test_loader = DataLoader(
         test_dataset,
@@ -532,16 +530,14 @@ def main():
                                                 zeroshot_dataset = other_dataset
                                             else:
                                                 zeroshot_dataset = other_dataset # won't be used for init because head_type is 'none'
-                                            head, _, _ = make_classifier_head(
-                                                                classifier_head,
-                                                                clip_encoder,
-                                                                head_type,
-                                                                zeroshot_dataset
-                                                         )
-                                            logit_head = LogitHead(
-                                                head,
-                                                logit_scale=logit,
-                                            ).train().cuda()
+                                            logit_head, _, _= make_classifier_model(classifier_head,
+                                                clip_encoder,
+                                                head_type,
+                                                zeroshot_dataset,
+                                                logit=logit,
+                                                text_encoder=None,      #HACK there are 2 random values 
+                                                modality='',
+                                            )
 
                                             # Create the optimizer
                                             params_groups = [
