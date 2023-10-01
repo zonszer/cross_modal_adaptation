@@ -29,7 +29,34 @@
               "--image-augmentation=flip",
               "--image-views=1"
             ]
-          }
+          },
+        {
+            "name": "train.py-linear-caltech101-TestRugular",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+                },
+            "args": [
+              "--modality=regularization",   //regularization
+            //   "--beta=0.1",   //regularization
+              "--classifier_head=linear",
+              "--classifier_init=zeroshot",
+              "--logit=4.60517",
+              "--hyperparams=linear",
+              "--dataset=caltech101",
+              "--train-shot=16",
+              "--seed=1",
+              "--clip-encoder=RN50",
+              "--image-layer-idx=0",
+              "--text-augmentation=hand_crafted",
+              "--image-augmentation=flip",
+              "--image-views=1"
+            ]
+          },
           
     ]
 }

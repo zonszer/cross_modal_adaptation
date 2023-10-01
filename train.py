@@ -136,7 +136,8 @@ def get_eval_heads(head, zero_shot_weights, ratio_list=[0.5], logit=None):
 def train(logit_head, image_encoder, text_encoder,
           image_loader, val_loader, text_loader,
           optimizer, scheduler, criterion, iters,
-          eval_freq=EVAL_FREQ, device="cuda"):
+          eval_freq=EVAL_FREQ, device="cuda",
+          beta=0):
     if image_loader is None and text_loader is None:
         raise ValueError("Both image_loader and text_loader are None")
     if image_loader is not None:
@@ -181,11 +182,14 @@ def train(logit_head, image_encoder, text_encoder,
             text = text.to(device)
             text_label = text_label.to(device)
             eot_indices = eot_indices.to(device)
-            text_feature = text_encoder(text, eot_indices)  #shape=torch.Size([4, 1024])
+            text_feature = text_encoder(text, eot_indices)  #shape=torch.Size([4, 1024]) 
         else:
             text_feature = None
         
-        if image_feature is not None and text_feature is not None:
+        if args.modality == "regularization":
+            feature_i, label_i = image_feature, image_label
+            feature_t, label_t = text_feature, text_label
+        elif image_feature is not None and text_feature is not None:        #TODO debug here
             feature = torch.cat([image_feature, text_feature], dim=0)   
             label = torch.cat([image_label, text_label], dim=0)
         elif image_feature is not None:
@@ -197,13 +201,24 @@ def train(logit_head, image_encoder, text_encoder,
         else:
             raise ValueError("Both image_feature and text_feature are None")
 
-        logit = logit_head(feature)
-        loss = criterion(logit, label)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
-        
+        if args.modality == "regularization":
+            logit_i = logit_head(feature_i)
+            logit_t = logit_head(feature_t)
+            loss_i = criterion(logit_i, label_i)
+            loss_t = criterion(logit_t, label_t)
+            loss = loss_i + loss_t * beta
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+        else:
+            logit = logit_head(feature)
+            loss = criterion(logit, label)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            
         if i % eval_freq == 0:
             val_acc = validate(logit_head, image_encoder, val_loader, device=device)
             if result_dict["val_acc"] is None or val_acc > result_dict["val_acc"]:
@@ -349,6 +364,7 @@ def main(args):
     hyperparams = HYPER_DICT[args.hyperparams]
     # filter out invalid batch sizes
     VALID_BATCH_SIZES = get_valid_batch_sizes(hyperparams, text_dataset, image_train_dataset, modality=args.modality)
+    beta_list = [0.1, 0.2, 0.3, 0.4, 0.5] # TODO: change this to a list of beta values
 
     def get_experiment_count(hyperparams):
         count = 1
@@ -356,6 +372,7 @@ def main(args):
         count *= len(hyperparams['weight_decay'])
         count *= len(VALID_BATCH_SIZES)
         count *= len(hyperparams['max_iter'])
+        count *= len(beta_list)
         return count
     experiment_count = get_experiment_count(hyperparams)
     cur_count = 0
@@ -364,161 +381,162 @@ def main(args):
         for wd in hyperparams['weight_decay']:
             for batch_size in VALID_BATCH_SIZES:
                 for iters in hyperparams['max_iter']:
-                    cur_count += 1
+                    for beta_iter in beta_list:
+                        cur_count += 1 
+                        hyperparams_str = get_hyperparams_str(
+                            hyperparams['optim'], lr, wd, batch_size, iters)
+                        
+                        # check if experiment has been done
+                        checkpoint_dir = os.path.join(save_dir, hyperparams_str)
+                        makedirs(checkpoint_dir)
+                        test_result_dict = {}
+                        test_result_path = os.path.join(checkpoint_dir, "test_result.pth")
+                        if os.path.exists(test_result_path):
+                            print(f"Already exists: {hyperparams_str} {cur_count}/{experiment_count}")
+                            test_result_dict = torch.load(test_result_path)
+                            continue
+                        else:
+                            print(f"Starting: {hyperparams_str} {cur_count}/{experiment_count}")
+                        
+                        # train logreg
 
-                    hyperparams_str = get_hyperparams_str(
-                        hyperparams['optim'], lr, wd, batch_size, iters)
-                    
-                    # check if experiment has been done
-                    checkpoint_dir = os.path.join(save_dir, hyperparams_str)
-                    makedirs(checkpoint_dir)
-                    test_result_dict = {}
-                    test_result_path = os.path.join(checkpoint_dir, "test_result.pth")
-                    if os.path.exists(test_result_path):
-                        print(f"Already exists: {hyperparams_str} {cur_count}/{experiment_count}")
-                        test_result_dict = torch.load(test_result_path)
-                        continue
-                    else:
-                        print(f"Starting: {hyperparams_str} {cur_count}/{experiment_count}")
-                    
-                    # train logreg
-
-                    # Create the logreg model
-                    image_encoder = torch.load(
-                        image_encoder_path).partial_model.train().cuda()        
-                    text_encoder = torch.load(
-                        text_encoder_path).partial_model.train().cuda()
-                    head, num_classes, in_features = make_classifier_head(
-                        args.classifier_head,
-                        args.clip_encoder,
-                        args.classifier_init,
-                        text_dataset,
-                        text_encoder
-                    )
-                    logit_head = LogitHead(
-                        head,
-                        logit_scale=args.logit,
-                    ).train().cuda()
-                    # Create the optimizer
-                    params_groups = [
-                        {'params': logit_head.parameters()},
-                        {'params': image_encoder.parameters()},
-                        {'params': text_encoder.parameters()},
-                    ]
-                    optimizer = build_optimizer(params_groups, hyperparams['optim'], lr, wd)
-                    scheduler = build_lr_scheduler(
-                        optimizer,
-                        hyperparams['lr_scheduler'],
-                        hyperparams['warmup_iter'],
-                        iters,
-                        warmup_type=hyperparams['warmup_type'],
-                        warmup_lr=hyperparams['warmup_min_lr']
-                    )
-                    criterion = torch.nn.CrossEntropyLoss()
-
-                    if args.modality == "cross_modal":
-                        text_batch_size = int(batch_size * CROSS_MODAL_BATCH_RATIO)
-                    elif args.modality == "uni_modal":
-                        text_batch_size = 0
-                    elif args.modality == "regularization":
-                        text_batch_size = num_classes
-                    if args.modality != "regularization":
-                        image_batch_size = batch_size - text_batch_size
-                    else:
-                        image_batch_size = batch_size
-
-                    text_loader = None
-                    if text_batch_size > 0:
-                        text_loader = DataLoader(
+                        # Create the logreg model
+                        image_encoder = torch.load(
+                            image_encoder_path).partial_model.train().cuda()        
+                        text_encoder = torch.load(
+                            text_encoder_path).partial_model.train().cuda()
+                        head, num_classes, in_features = make_classifier_head(
+                            args.classifier_head,
+                            args.clip_encoder,
+                            args.classifier_init,
                             text_dataset,
-                            batch_size=text_batch_size,
-                            shuffle=True,
-                            num_workers=args.num_workers,
-                            pin_memory=True,
-                            drop_last=True,     #!
+                            text_encoder
                         )
-                    
-                    image_loader = None
-                    if image_batch_size > 0:
-                        image_loader = DataLoader(
-                            image_train_dataset,
-                            batch_size=image_batch_size,
-                            shuffle=True,
-                            num_workers=args.num_workers,
-                            pin_memory=True,
-                            drop_last=True,
+                        logit_head = LogitHead(
+                            head,
+                            logit_scale=args.logit,
+                        ).train().cuda()
+                        # Create the optimizer
+                        params_groups = [
+                            {'params': logit_head.parameters()},
+                            {'params': image_encoder.parameters()},
+                            {'params': text_encoder.parameters()},
+                        ]
+                        optimizer = build_optimizer(params_groups, hyperparams['optim'], lr, wd)
+                        scheduler = build_lr_scheduler(
+                            optimizer,
+                            hyperparams['lr_scheduler'],
+                            hyperparams['warmup_iter'],
+                            iters,
+                            warmup_type=hyperparams['warmup_type'],
+                            warmup_lr=hyperparams['warmup_min_lr']
                         )
-                    
-                    val_loader = DataLoader(
-                        image_val_dataset,
-                        batch_size=batch_size,
-                        shuffle=False,
-                        num_workers=args.num_workers,
-                        pin_memory=True,
-                    )
+                        criterion = torch.nn.CrossEntropyLoss()
 
-                    result_dict = train(
-                        logit_head, image_encoder, text_encoder, 
-                        image_loader, val_loader, text_loader, 
-                        optimizer, scheduler, criterion, iters,
-                        eval_freq=EVAL_FREQ
-                    )
-                    
-                    test_result_dict = {}
-                    test_result_dict['val_acc'] = result_dict['val_acc']
-                    test_result_dict['iter'] = result_dict['iter']
-                    test_result_dict['test_accs'] = {}
+                        if args.modality == "cross_modal":
+                            text_batch_size = int(batch_size * CROSS_MODAL_BATCH_RATIO)
+                        elif args.modality == "uni_modal":
+                            text_batch_size = 0
+                        elif args.modality == "regularization":
+                            text_batch_size = num_classes
+                        if args.modality != "regularization":
+                            image_batch_size = batch_size - text_batch_size
+                        else:
+                            image_batch_size = batch_size
 
-                    # Create the logreg model and load the weights:
-                    head, num_classes, in_features = make_classifier_head(
-                        args.classifier_head,
-                        args.clip_encoder,
-                        args.classifier_init,
-                        text_dataset,
-                        text_encoder,
-                        bias=False
-                    )
-                    old_logit_head = LogitHead(
-                        head,
-                        logit_scale=args.logit,
-                    )
-                    old_logit_head.load_state_dict(result_dict['logit_head'])
-
-                    image_encoder = torch.load(image_encoder_path).partial_model
-                    image_encoder.load_state_dict(result_dict['image_encoder'])
-                    image_encoder = image_encoder.cuda().eval()
-                    text_encoder = torch.load(text_encoder_path).partial_model
-                    text_encoder.load_state_dict(result_dict['text_encoder'])
-                    text_encoder = text_encoder.cuda().eval()
-                    original_text_encoder = torch.load(text_encoder_path).partial_model
-                    original_text_encoder = original_text_encoder.eval()
-
-                    zero_shot_weights = get_zero_shot_weights(text_dataset, num_classes, in_features, deepcopy(original_text_encoder).cuda())
-                    # zero_shot_weights = get_zero_shot_weights(text_dataset, num_classes, in_features)
-                    eval_heads = get_eval_heads(
-                        deepcopy(old_logit_head.head),
-                        zero_shot_weights,
-                        logit=args.logit,
-                        ratio_list=[0.5]
-                    )
-
-
-                    for eval_type in eval_heads:
-                        eval_head = eval_heads[eval_type]
-                        eval_head.cuda().eval()
-                        test_loader = DataLoader(
-                            test_dataset,
-                            batch_size=args.test_batch_size,
+                        text_loader = None
+                        if text_batch_size > 0:
+                            text_loader = DataLoader(
+                                text_dataset,
+                                batch_size=text_batch_size,
+                                shuffle=True,
+                                num_workers=args.num_workers,
+                                pin_memory=True,
+                                drop_last=True,     #!
+                            )
+                        
+                        image_loader = None
+                        if image_batch_size > 0:
+                            image_loader = DataLoader(
+                                image_train_dataset,
+                                batch_size=image_batch_size,
+                                shuffle=True,
+                                num_workers=args.num_workers,
+                                pin_memory=True,
+                                drop_last=True,
+                            )
+                        
+                        val_loader = DataLoader(
+                            image_val_dataset,
+                            batch_size=batch_size,
                             shuffle=False,
                             num_workers=args.num_workers,
                             pin_memory=True,
                         )
-                        test_acc = validate(eval_head, image_encoder, test_loader, device="cuda")
-                        test_result_dict['test_accs'][eval_type] = test_acc
-                        eval_head.cpu()
-                    torch.save(test_result_dict, test_result_path)
-                    print(test_result_dict)
-                    print(f"Finished testing {hyperparams_str} {cur_count}/{experiment_count}")
+
+                        result_dict = train(
+                            logit_head, image_encoder, text_encoder, 
+                            image_loader, val_loader, text_loader, 
+                            optimizer, scheduler, criterion, iters,
+                            eval_freq=EVAL_FREQ,
+                            beta=beta_iter,
+                        )
+                        
+                        test_result_dict = {}
+                        test_result_dict['val_acc'] = result_dict['val_acc']
+                        test_result_dict['iter'] = result_dict['iter']
+                        test_result_dict['test_accs'] = {}
+
+                        # Create the logreg model and load the weights:
+                        head, num_classes, in_features = make_classifier_head(
+                            args.classifier_head,
+                            args.clip_encoder,
+                            args.classifier_init,
+                            text_dataset,
+                            text_encoder,
+                            bias=False
+                        )
+                        old_logit_head = LogitHead(
+                            head,
+                            logit_scale=args.logit,
+                        )
+                        old_logit_head.load_state_dict(result_dict['logit_head'])
+
+                        image_encoder = torch.load(image_encoder_path).partial_model
+                        image_encoder.load_state_dict(result_dict['image_encoder'])
+                        image_encoder = image_encoder.cuda().eval()
+                        text_encoder = torch.load(text_encoder_path).partial_model
+                        text_encoder.load_state_dict(result_dict['text_encoder'])
+                        text_encoder = text_encoder.cuda().eval()
+                        original_text_encoder = torch.load(text_encoder_path).partial_model
+                        original_text_encoder = original_text_encoder.eval()
+
+                        zero_shot_weights = get_zero_shot_weights(text_dataset, num_classes, in_features, deepcopy(original_text_encoder).cuda())
+                        # zero_shot_weights = get_zero_shot_weights(text_dataset, num_classes, in_features)
+                        eval_heads = get_eval_heads(
+                            deepcopy(old_logit_head.head),
+                            zero_shot_weights,
+                            logit=args.logit,
+                            ratio_list=[0.5]
+                        )
+
+
+                        for eval_type in eval_heads:
+                            eval_head = eval_heads[eval_type]
+                            eval_head.cuda().eval()
+                            test_loader = DataLoader(
+                                test_dataset,
+                                batch_size=args.test_batch_size,
+                                shuffle=False,
+                                num_workers=args.num_workers,
+                                pin_memory=True,
+                            )
+                            test_acc = validate(eval_head, image_encoder, test_loader, device="cuda")
+                            test_result_dict['test_accs'][eval_type] = test_acc
+                            eval_head.cpu()
+                        torch.save(test_result_dict, test_result_path)
+                        print(test_result_dict)
+                        print(f"Finished testing {hyperparams_str} {cur_count}/{experiment_count}")
 
 
 if __name__ == "__main__":
