@@ -23,6 +23,8 @@ from features import get_backbone_name, \
                      get_test_features_path
 
 torch.set_num_threads(4) # To maximize efficiency, please tune the number of threads for your machine
+from utils_temp.utils_ import become_deterministic
+
 
 CROSS_MODAL_BATCH_RATIO = 0.5 # Half of the batch is image, the other half is text
 EVAL_FREQ = 100 # Evaluate on val set per 100 iterations (for early stopping)
@@ -102,12 +104,13 @@ def get_hyperparams_str(optim,
 
 
 def get_wiseft(head, zero_shot_weights, wiseft_ratio=0.5):
-    if type(head) == torch.nn.Linear:
-        head.weight.data = (1 - wiseft_ratio) * head.weight.data + wiseft_ratio * torch.nn.functional.normalize(zero_shot_weights, dim=1)
-    elif type(head) == torch.nn.Sequential:
-        assert type(head[-1]) == torch.nn.Linear, f"Invalid head: {head}"
-        head[-1].weight.data = (1 - wiseft_ratio) * head[-1].weight.data + wiseft_ratio * torch.nn.functional.normalize(zero_shot_weights, dim=1)
-    return head
+    if type(head) == torch.nn.Linear:  # Check if the head is a linear layer
+        head.weight.data = (1 - wiseft_ratio) * head.weight.data + wiseft_ratio * torch.nn.functional.normalize(zero_shot_weights, dim=1)  # Perform wise-ft on the linear layer's weight data
+    elif type(head) == torch.nn.Sequential:  # Check if the head is a sequential model
+        assert type(head[-1]) == torch.nn.Linear, f"Invalid head: {head}"  # Ensure that the last layer of the sequential model is a linear layer
+        head[-1].weight.data = (1 - wiseft_ratio) * head[-1].weight.data + wiseft_ratio * torch.nn.functional.normalize(zero_shot_weights, dim=1)  # Perform wise-ft on the weight data of the last linear layer in the sequential model
+    return head  # Return the modified head model
+
 
 
 def get_eval_heads(head, zero_shot_weights, ratio_list=[0.5], logit=None):
@@ -117,17 +120,17 @@ def get_eval_heads(head, zero_shot_weights, ratio_list=[0.5], logit=None):
     )
 
     eval_heads = {
-        'head': logit_head.cuda().eval(),
+        'head': logit_head.cuda().eval(),  # Create a dictionary with the original head model as the 'head' key
     }
     for ratio in ratio_list:
         # TODO (Warning): This wise-ft does not consider partial finetuning of image encoder
-        wiseft = get_wiseft(deepcopy(head), zero_shot_weights, ratio)
+        wiseft = get_wiseft(deepcopy(head), zero_shot_weights, ratio)  # Perform wise-ft (weight sharing and fine-tuning) on the head model
         wiseft_head = LogitHead(
             wiseft,
             logit_scale=logit,
         )
-        eval_heads[f'head_wiseft_{ratio}'] = wiseft_head.cuda().eval()
-    return eval_heads
+        eval_heads[f'head_wiseft_{ratio}'] = wiseft_head.cuda().eval()  # Add the wise-ft head model to the dictionary with a key based on the ratio
+    return eval_heads  # Return the dictionary containing the evaluation heads
 
 
 def train(logit_head, image_encoder, text_encoder,
@@ -162,10 +165,10 @@ def train(logit_head, image_encoder, text_encoder,
                 image, image_label = next(image_loader_iter)
             except StopIteration:
                 image_loader_iter = iter(image_loader)
-                image, image_label = next(image_loader_iter)
+                image, image_label = next(image_loader_iter)        #! iter num matters
             image = image.to(device)
             image_label = image_label.to(device)
-            image_feature = image_encoder(image)
+            image_feature = image_encoder(image)    #shape=torch.Size([4, 1024])
         else:
             image_feature = None
         
@@ -178,12 +181,12 @@ def train(logit_head, image_encoder, text_encoder,
             text = text.to(device)
             text_label = text_label.to(device)
             eot_indices = eot_indices.to(device)
-            text_feature = text_encoder(text, eot_indices)
+            text_feature = text_encoder(text, eot_indices)  #shape=torch.Size([4, 1024])
         else:
             text_feature = None
         
         if image_feature is not None and text_feature is not None:
-            feature = torch.cat([image_feature, text_feature], dim=0)
+            feature = torch.cat([image_feature, text_feature], dim=0)   
             label = torch.cat([image_label, text_label], dim=0)
         elif image_feature is not None:
             feature = image_feature
@@ -257,7 +260,8 @@ def get_valid_batch_sizes(hyperparams, text_dataset, image_train_dataset, batch_
 def main(args):
     if args.seed >= 0:
         print("Setting fixed seed: {}".format(args.seed))
-        set_random_seed(args.seed)
+        # set_random_seed(args.seed)
+        become_deterministic(args.seed)
 
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
@@ -381,7 +385,7 @@ def main(args):
 
                     # Create the logreg model
                     image_encoder = torch.load(
-                        image_encoder_path).partial_model.train().cuda()
+                        image_encoder_path).partial_model.train().cuda()        #TODO check the model class
                     text_encoder = torch.load(
                         text_encoder_path).partial_model.train().cuda()
                     head, num_classes, in_features = make_classifier_head(
@@ -426,7 +430,7 @@ def main(args):
                             shuffle=True,
                             num_workers=args.num_workers,
                             pin_memory=True,
-                            drop_last=True,
+                            drop_last=True,     #!
                         )
                     
                     image_loader = None
@@ -460,7 +464,7 @@ def main(args):
                     test_result_dict['iter'] = result_dict['iter']
                     test_result_dict['test_accs'] = {}
 
-                    # Create the logreg model and load the weights
+                    # Create the logreg model and load the weights:
                     head, num_classes, in_features = make_classifier_head(
                         args.classifier_head,
                         args.clip_encoder,

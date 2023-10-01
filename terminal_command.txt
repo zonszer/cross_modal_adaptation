@@ -1,0 +1,4 @@
+# date 9.30:
+CUDA_VISIBLE_DEVICES=1 python train.py --modality cross_modal --classifier_head linear --classifier_init zeroshot --logit 4.60517 --hyperparams linear --dataset ucf101 --train-shot 16 --seed 1 --clip-encoder RN50 --image-layer-idx 0 --text-augmentation hand_crafted --image-augmentation flip --image-views 1
+
+CUDA_VISIBLE_DEVICES=2 python train.py --modality cross_modal --classifier_head linear --classifier_init zeroshot --logit 4.60517 --hyperparams linear --dataset caltech101 --train-shot 16 --seed 1 --clip-encoder RN50 --image-layer-idx 0 --text-augmentation hand_crafted --image-augmentation flip --image-views 1

@@ -57,10 +57,10 @@ declare -a DATASETS=(
 TOTAL=$(( TOTAL * ${#DATASETS[@]} ))
 
 declare -a ALL_SHOTS=(
-    "1"
-    "2"
-    "4"
-    "8"
+    # "1"
+    # "2"
+    # "4"
+    # "8"
     "16"
 )
 TOTAL=$(( TOTAL * ${#ALL_SHOTS[@]} ))

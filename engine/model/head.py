@@ -90,7 +90,7 @@ def make_classifier_head(classifier_head,
     num_classes = int(zeroshot_dataset.label_tensor.max()) + 1
 
     linear_head = nn.Linear(in_features, num_classes, bias=bias)
-    if classifier_init == 'zeroshot':
+    if classifier_init == 'zeroshot':       #use text weight to init adaptor:
         # assert zeroshot_dataset.input_tensor.shape[1] == in_features
         linear_head.weight.data = get_zero_shot_weights(
             zeroshot_dataset, num_classes, in_features, text_encoder)
