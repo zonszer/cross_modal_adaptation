@@ -46,8 +46,8 @@
               "--classifier_head=linear",
               "--classifier_init=zeroshot",
               "--logit=4.60517",
-              "--hyperparams=linear",
-              "--dataset=caltech101",
+              "--hyperparams=linear_regular",   //
+              "--dataset=caltech101", 
               "--train-shot=16",
               "--seed=1",
               "--clip-encoder=RN50",

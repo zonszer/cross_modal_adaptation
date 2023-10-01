@@ -260,7 +260,7 @@ def main(args):
                             for iters in hyperparams['max_iter']:
                                 cur_count += 1
                                 hyperparams_str = get_hyperparams_str(
-                                    hyperparams['optim'], lr, wd, batch_size, iters)
+                                    optim=hyperparams['optim'], lr=lr, wd=wd, bs=batch_size, iters=iters)
                                 
                                 # all_hyper_dict[hyperparams_str] = {}
                                 # check if experiment has been done

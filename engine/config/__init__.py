@@ -132,11 +132,18 @@ parser.add_argument(
 ###########################
 
 parser.add_argument(
+    "--id",
+    type=str,
+    default="XXX",
+    help="whether or not to perform cross-modal training (ie. half batch is image, half batch is text)",
+)
+parser.add_argument(
     "--modality",
     type=str,
     default="cross_modal",
     choices=["cross_modal", # half batch image, half batch text
              "uni_modal", # whole batch image
+             "regularization", 
     ],
     help="whether or not to perform cross-modal training (ie. half batch is image, half batch is text)",
 )
@@ -168,12 +175,19 @@ parser.add_argument(
     help="logit scale (exp(logit) is the inverse softmax temperature)",
 )
 parser.add_argument(
+    "--beta",
+    type=float,
+    default=0.,
+    help="hyparams for regularization mode",
+)
+parser.add_argument(
     "--hyperparams",
     type=str,
     default="linear",
     choices=["linear", # linear hyper
              "adapter", # adapter hyper
              "partial", # partial hyper
+             "linear_regular", 
     ],
     help="hyperparams sweep",
 )

@@ -510,7 +510,7 @@ def main():
                                         cur_count += 1
 
                                         hyperparams_str = get_hyperparams_str(
-                                            hyperparams['optim'], lr, wd, batch_size, iters)
+                                            optim=hyperparams['optim'], lr=lr, wd=wd, bs=batch_size, iters=iters)
                                         
                                         # check if experiment has been done
                                         print(f"[{cur_count}/{experiment_count}]: {hyperparams_str}. Running")

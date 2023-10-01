@@ -24,7 +24,7 @@ from features import get_backbone_name, \
 
 torch.set_num_threads(4) # To maximize efficiency, please tune the number of threads for your machine
 from utils_temp.utils_ import become_deterministic
-
+import json
 
 CROSS_MODAL_BATCH_RATIO = 0.5 # Half of the batch is image, the other half is text
 EVAL_FREQ = 100 # Evaluate on val set per 100 iterations (for early stopping)
@@ -51,9 +51,11 @@ def get_modality_name(modality,
         feature_name = f"{text_feature_name}-{image_feature_name}"
     elif modality == "uni_modal":
         feature_name = image_feature_name
+    elif modality == "regularization":
+        feature_name = f"regularization_{text_feature_name}-{image_feature_name}"
     return os.path.join(
         get_backbone_name(clip_encoder),
-        feature_name
+        'id_' + args.id + '-' + feature_name,
     )
 
 
@@ -94,12 +96,13 @@ def get_save_dir(args):
     return save_dir
 
 
-def get_hyperparams_str(optim,
-                        lr,
-                        wd,
-                        batch_size,
-                        iters):
-    hyperparams_str = f"optim_{optim}-lr_{lr}-wd_{wd}-bs_{batch_size}-iters_{iters}"
+def get_hyperparams_str(**args_dict):
+    hyperparams_str = ''
+    for arg_name, value in args_dict.items():
+        if value == -1:
+            continue
+        else:
+            hyperparams_str = hyperparams_str + f"{arg_name}_{value}-"
     return hyperparams_str
 
 
@@ -137,7 +140,7 @@ def train(logit_head, image_encoder, text_encoder,
           image_loader, val_loader, text_loader,
           optimizer, scheduler, criterion, iters,
           eval_freq=EVAL_FREQ, device="cuda",
-          beta=0):
+          beta=-1):
     if image_loader is None and text_loader is None:
         raise ValueError("Both image_loader and text_loader are None")
     if image_loader is not None:
@@ -189,7 +192,7 @@ def train(logit_head, image_encoder, text_encoder,
         if args.modality == "regularization":
             feature_i, label_i = image_feature, image_label
             feature_t, label_t = text_feature, text_label
-        elif image_feature is not None and text_feature is not None:        #TODO debug here
+        elif image_feature is not None and text_feature is not None:        
             feature = torch.cat([image_feature, text_feature], dim=0)   
             label = torch.cat([image_label, text_label], dim=0)
         elif image_feature is not None:
@@ -364,8 +367,10 @@ def main(args):
     hyperparams = HYPER_DICT[args.hyperparams]
     # filter out invalid batch sizes
     VALID_BATCH_SIZES = get_valid_batch_sizes(hyperparams, text_dataset, image_train_dataset, modality=args.modality)
-    beta_list = [0.1, 0.2, 0.3, 0.4, 0.5] # TODO: change this to a list of beta values
-
+    if args.modality == "regularization":
+        beta_list = [0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8] 
+    else:
+        beta_list = [-1]
     def get_experiment_count(hyperparams):
         count = 1
         count *= len(hyperparams['lr'])
@@ -384,16 +389,18 @@ def main(args):
                     for beta_iter in beta_list:
                         cur_count += 1 
                         hyperparams_str = get_hyperparams_str(
-                            hyperparams['optim'], lr, wd, batch_size, iters)
+                            optim=hyperparams['optim'], lr=lr, wd=wd, bs=batch_size, iters=iters, beta=beta_iter)
                         
                         # check if experiment has been done
                         checkpoint_dir = os.path.join(save_dir, hyperparams_str)
                         makedirs(checkpoint_dir)
                         test_result_dict = {}
-                        test_result_path = os.path.join(checkpoint_dir, "test_result.pth")
+                        test_result_path = os.path.join(checkpoint_dir, f"{hyperparams_str}.json")
                         if os.path.exists(test_result_path):
                             print(f"Already exists: {hyperparams_str} {cur_count}/{experiment_count}")
-                            test_result_dict = torch.load(test_result_path)
+                            # test_result_dict = torch.load(test_result_path)
+                            with open(filename, 'r') as file:
+                                test_result_dict = json.load(test_result_path)
                             continue
                         else:
                             print(f"Starting: {hyperparams_str} {cur_count}/{experiment_count}")
@@ -439,6 +446,7 @@ def main(args):
                             text_batch_size = 0
                         elif args.modality == "regularization":
                             text_batch_size = num_classes
+
                         if args.modality != "regularization":
                             image_batch_size = batch_size - text_batch_size
                         else:
@@ -534,7 +542,9 @@ def main(args):
                             test_acc = validate(eval_head, image_encoder, test_loader, device="cuda")
                             test_result_dict['test_accs'][eval_type] = test_acc
                             eval_head.cpu()
-                        torch.save(test_result_dict, test_result_path)
+                        filename = test_result_path
+                        with open(filename, "w") as file:
+                            json.dump(test_result_dict, file)
                         print(test_result_dict)
                         print(f"Finished testing {hyperparams_str} {cur_count}/{experiment_count}")
 

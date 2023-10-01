@@ -10,6 +10,17 @@ HYPER_DICT = {
         'warmup_type': "linear",
         'warmup_min_lr': 1e-5,
     },
+    'linear_regular': {
+        'optim': "adamw",
+        'lr': [0.0001],
+        'weight_decay': [0.0, 0.01, 0.0001],
+        'lr_scheduler': "cosine",
+        'batch_size': [32, 64, 96, 128],
+        'max_iter': [12800],
+        'warmup_iter': 50,
+        'warmup_type': "linear",
+        'warmup_min_lr': 1e-5,
+    },
     'partial': {
         'optim': "adamw",
         'lr': [0.00001, 0.000001, 0.0000001],
