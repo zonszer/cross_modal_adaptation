@@ -125,6 +125,18 @@ parser.add_argument(
     default=0,
     help="number of workers for dataloader",
 )
+parser.add_argument(
+    "--topsim",
+    type=int,
+    default=0,
+    help="number of top similar logits",
+)
+parser.add_argument(
+    "--num_clsf",
+    type=int,
+    default=0,
+    help="number of sub-classifiers in the model",
+)
 
 
 ###########################

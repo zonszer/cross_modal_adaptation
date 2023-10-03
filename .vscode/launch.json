@@ -31,7 +31,7 @@
             ]
           },
         {
-            "name": "train.py-linear-caltech101-TestRugular",
+            "name": "train.py-linear-ucf101 -TestRugular",
             "type": "python",
             "request": "launch",
             "program": "train.py",
@@ -41,20 +41,22 @@
                 "CUDA_VISIBLE_DEVICES": "0"
                 },
             "args": [
+              "--id=debug_uni_strategy",
               "--modality=regularization",   //regularization
-            //   "--beta=0.1",   //regularization
               "--classifier_head=linear",
               "--classifier_init=zeroshot",
               "--logit=4.60517",
               "--hyperparams=linear_regular",   //
-              "--dataset=caltech101", 
+              "--dataset=ucf101", 
               "--train-shot=16",
               "--seed=1",
               "--clip-encoder=RN50",
               "--image-layer-idx=0",
               "--text-augmentation=hand_crafted",
               "--image-augmentation=flip",
-              "--image-views=1"
+              "--image-views=1",
+              "--topsim=3",   //only when regularization, it can be used
+              "--num_clsf=2",   //
             ]
           },
           

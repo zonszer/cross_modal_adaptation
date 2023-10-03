@@ -8,7 +8,7 @@ from engine.config import parser
 
 from engine.tools.utils import makedirs, set_random_seed
 from engine.datasets.utils import TensorDataset, TextTensorDataset
-from engine.model.head import make_classifier_head, get_zero_shot_weights, make_classifier_head_refine, make_classifier_model
+from engine.model.head import make_classifier_head, get_zero_shot_weights, make_classifier_model
 from engine.model.logit import LogitHead
 from engine.optimizer.default import HYPER_DICT
 from engine.optimizer.optim import build_optimizer
@@ -118,7 +118,7 @@ def get_wiseft(head, zero_shot_weights, wiseft_ratio=0.5):
 
 def get_eval_heads(head, zero_shot_weights, ratio_list=[0.5], logit=None):
     logit_head = LogitHead(
-        deepcopy(head),
+        deepcopy(head),     #old_head
         logit_scale=logit,
     )
 
@@ -133,6 +133,16 @@ def get_eval_heads(head, zero_shot_weights, ratio_list=[0.5], logit=None):
             logit_scale=logit,
         )
         eval_heads[f'head_wiseft_{ratio}'] = wiseft_head.cuda().eval()  # Add the wise-ft head model to the dictionary with a key based on the ratio
+    return eval_heads  # Return the dictionary containing the evaluation heads
+
+def get_eval_heads_new(model, args):
+    logit_head_main = model.classifier_main
+
+    eval_heads = {
+        'head_main': logit_head_main.cuda().eval(),  # Create a dictionary with the original head model as the 'head' key
+    }
+
+    eval_heads[f'multi_head-num_clsf_{args.num_clsf}, topsim_{args.topsim}'] = model.cuda().eval()  
     return eval_heads  # Return the dictionary containing the evaluation heads
 
 
@@ -205,11 +215,19 @@ def train(logit_head, image_encoder, text_encoder,
             raise ValueError("Both image_feature and text_feature are None")
 
         if args.modality == "regularization":
-            logit_i = logit_head(feature_i)
-            logit_t = logit_head(feature_t)
-            loss_i = criterion(logit_i, label_i)
-            loss_t = criterion(logit_t, label_t)
-            loss = loss_i + loss_t * beta
+            logits_i_dict, labels_i_dict = logit_head(feature_i, label_i)
+            logits_t_dict, labels_t_dict = logit_head(feature_t, label_t)
+            def get_loss(logits_dict, labels_dict):
+                loss = torch.empty(0).to(device)
+                # pred_list = {}
+                # labels_list = {}
+                for (model_id, logits), (model_id_, labels) in zip(logits_dict.items(), labels_dict.items()):
+                    assert model_id == model_id_ and logits.shape[0] == labels.shape[0]
+                    loss = torch.cat([loss, criterion(logits, labels).unsqueeze(0)], dim=0)
+                    # pred_list[model_id] = torch.argmax(logits, dim=1)
+                    # labels_list[model_id] = labels
+                return loss.sum()
+            loss = get_loss(logits_i_dict, labels_i_dict) + beta*get_loss(logits_t_dict, labels_t_dict)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -241,22 +259,50 @@ def train(logit_head, image_encoder, text_encoder,
             
 
 def validate(logit_head, image_encoder, val_loader, device="cuda"):
+    logits_dict_all = {}
+    labels_all = {} 
     with torch.no_grad():
         logit_head.eval()
         image_encoder.eval()
         val_acc = 0
         val_count = 0.
+        
         for image, image_label in val_loader:
             image = image.to(device)
             image_label = image_label.to(device)
             image_feature = image_encoder(image)
-            logit = logit_head(image_feature)
-            pred = torch.argmax(logit, dim=1)
+            pred, logits_dict, index_dict = logit_head(image_feature)
+            if pred.shape != image_label.shape:
+                pred = torch.argmax(pred, dim=1)
+            
+            # Store per batch logits and labels
+            for key in logits_dict.keys():               
+                if key not in logits_dict_all:
+                    logits_dict_all[key] = logits_dict[key].detach().cpu()
+                    labels_all[key] = image_label.detach().cpu()[index_dict[key]]
+                else:
+                    logits_dict_all[key] = torch.cat([logits_dict_all[key], logits_dict[key].detach().cpu()])
+                    labels_all[key] = torch.cat([labels_all[key], image_label.detach().cpu()[index_dict[key]]])
+            
             val_acc += torch.sum(pred == image_label).item()
             val_count += image_label.size(0)
-            image.cpu()
         val_acc /= val_count
+        print(f'\n total ACC: {val_acc}')
+        # Accuracy per classifier
+        acc_dict = validate_sub_classifers(logits_dict_all, labels_all)
+        for model_id, acc in acc_dict.items():
+            print(f'{model_id} ACC: {acc}')
     return val_acc
+
+def validate_sub_classifers(logits_dict, labels):
+    acc_dict = {}
+    for model_id, logits in logits_dict.items():
+        pred = torch.argmax(logits, dim=1)              #TODO debug here
+        acc = torch.sum(pred == labels[model_id]).item() / labels[model_id].size(0)
+        # Store accuracy for this model_id
+        acc_dict[model_id] = acc 
+    return acc_dict
+
 
 def get_valid_batch_sizes(hyperparams, text_dataset, image_train_dataset, batch_ratio=CROSS_MODAL_BATCH_RATIO, modality='cross_modal'):
     VALID_BATCH_SIZES = []
@@ -399,6 +445,7 @@ def main(args):
                         if os.path.exists(test_result_path):
                             print(f"Already exists: {hyperparams_str} {cur_count}/{experiment_count}")
                             # test_result_dict = torch.load(test_result_path)
+                            filename = test_result_path
                             with open(filename, 'r') as file:
                                 test_result_dict = json.load(test_result_path)
                             continue
@@ -418,8 +465,9 @@ def main(args):
                             args.classifier_init,
                             text_dataset,
                             text_encoder,
-                            args.logit, args.modality,
+                            args.logit, args.modality, args.topsim, args.num_clsf,
                         )
+                        logit_head = logit_head.train().cuda()
 
                         # Create the optimizer
                         params_groups = [
@@ -499,7 +547,7 @@ def main(args):
                             args.classifier_init,
                             text_dataset,
                             text_encoder,
-                            args.logit, args.modality,
+                            args.logit, args.modality, args.topsim, args.num_clsf,
                         )
 
                         old_logit_head.load_state_dict(result_dict['logit_head'])
@@ -514,12 +562,15 @@ def main(args):
 
                         zero_shot_weights = get_zero_shot_weights(text_dataset, num_classes, in_features, deepcopy(original_text_encoder).cuda())
                         # zero_shot_weights = get_zero_shot_weights(text_dataset, num_classes, in_features)
-                        eval_heads = get_eval_heads(
-                            deepcopy(old_logit_head.head),
-                            zero_shot_weights,
-                            logit=args.logit,
-                            ratio_list=[0.5]
-                        )
+                        if args.modality == 'regularization':
+                            eval_heads = get_eval_heads_new(old_logit_head, args)
+                        else:
+                            eval_heads = get_eval_heads(
+                                deepcopy(old_logit_head.head),
+                                zero_shot_weights,
+                                logit=args.logit,
+                                ratio_list=[0.5]
+                            )
 
 
                         for eval_type in eval_heads:
