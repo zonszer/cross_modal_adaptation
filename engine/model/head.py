@@ -55,11 +55,15 @@ def get_text_dataset_per_class(text_dataset):
         assert len(text_dataset_per_class[text_label]) == num_of_templates
     return text_dataset_per_class, num_of_templates
 
-def get_zero_shot_weights(text_dataset, num_classes, in_features, text_encoder, device="cuda"):
+def get_zero_shot_weights(text_dataset, num_classes, in_features, text_encoder, device="cuda", class_idx_list=None):
     with torch.no_grad():
         text_dataset_per_class, _ = get_text_dataset_per_class(text_dataset)
         weights = torch.zeros(num_classes, in_features)
-        for label in range(num_classes):
+        if class_idx_list == None:
+            labels = range(num_classes)
+        else:
+            labels = class_idx_list
+        for j, label in enumerate(labels):
             texts = None
             eot_indices = None
             for i in range(len(text_dataset_per_class[label])):
@@ -74,7 +78,7 @@ def get_zero_shot_weights(text_dataset, num_classes, in_features, text_encoder, 
                     eot_indices = torch.cat([eot_indices, eot_indice], dim=0)
             text_features = text_encoder(texts, eot_indices)
             text_features = text_features.mean(dim=0)
-            weights[label] = text_features
+            weights[j] = text_features
         # normalize the weights
         weights.data = torch.nn.functional.normalize(weights, dim=1)
     return weights
@@ -88,6 +92,7 @@ def make_classifier_head(classifier_head,
                          in_features,
                          bias=False,
                          num_classes=None,
+                         class_list=None,
                          ):
     assert classifier_head in AVAI_HEADS
 
@@ -98,11 +103,11 @@ def make_classifier_head(classifier_head,
     if classifier_init == 'zeroshot':       #use text weight to init adaptor:
         # assert zeroshot_dataset.input_tensor.shape[1] == in_features
         linear_head.weight.data = get_zero_shot_weights(
-            zeroshot_dataset, num_classes, in_features, text_encoder)
+            zeroshot_dataset, num_classes, in_features, text_encoder, class_idx_list=class_list)
     
     if classifier_head == 'linear':
         head = linear_head
-    elif classifier_head == 'adapter':
+    elif classifier_head == 'adapter':                      #HACK: not mofify adapter init yet
         adapter = Adapter(in_features, residual_ratio=0.2)
         head = nn.Sequential(
             adapter,
@@ -164,16 +169,17 @@ class MultiClassifier(nn.Module):
         self.model_instance_dict = {}
 
         # assign class attributes:
-        self.classifier_main = self.get_classifier_model(num_classes_=self.num_classes, model_id='main')
+        self.subclassifier_id_main = self.get_classifier_model(num_classes_=self.num_classes, model_id='main')
         if strategy == 'uniform':
             (self.cls2classifier_dict, self.classifier_info_dict, 
              self.labelmapping_dict, self.labelmapping_dict_re
                 ) = self._uniform_strategy(self.cls2classifier_dict)
             # Create classifier instances:
-            self.model_instance_dict['main'] = self.classifier_main
+            self.model_instance_dict['main'] = self.subclassifier_id_main
             for i in sorted(list(set(self.cls2classifier_dict.values()))):
                 self.model_instance_dict[i] = self.get_classifier_model(num_classes_=self.classifier_info_dict[i], 
                                                                         model_id=i).to(self.args.device)
+                exec(f'self.subclassifier_id_{i} = self.model_instance_dict[i]')
            # Assign classifiers to classes:
             for i in range(self.num_classes):       #create how many classifiers
                 model_id = self.cls2classifier_dict[i]
@@ -297,6 +303,12 @@ class MultiClassifier(nn.Module):
 
     def get_classifier_model(self, num_classes_=None, model_id=None):
         '''Create a classifier model based on the given parameters'''
+        if model_id == 'main':
+            class_list = None
+        else:
+            class_idxs_dict = self._collect_samemapping(self.cls2classifier_dict)  
+            class_list = class_idxs_dict[model_id]          #get the class list for the sub-classifier
+
         head_refine, num_classes, in_features = make_classifier_head(        #TODO: utilize num_classes 记得测试原本的setting是否可行
             self.args.classifier_head,
             self.args.classifier_init,
@@ -304,6 +316,7 @@ class MultiClassifier(nn.Module):
             self.args.text_encoder,
             in_features=self.in_features,
             num_classes=num_classes_,
+            class_list=class_list,
         )
         logit_head = LogitHead(
             head_refine,
@@ -407,7 +420,7 @@ class MultiClassifier(nn.Module):
         ''' when has no labels and idxs, forward the main classifier, then according to the x_logits 
         to select the sub-classifier, then forward the sub-classifier to predict the labels
         '''
-        logits_dict = {}    # dict to hold the logits for each classifier
+        pred_dict = {}    # dict to hold the logits for each classifier
         labels_dict = {}    # dict to hold the seq index
         idxs_seq = []
         pred_all = torch.empty(0).to(self.args.device)
@@ -423,6 +436,8 @@ class MultiClassifier(nn.Module):
             pred_all = torch.cat([pred_all, pred], dim=0)
             idxs_seq.extend(x_idxs)
             labels_dict[model_id] = x_idxs
-            logits_dict[model_id] = x_logits
+            pred_dict[model_id] = pred
         original_order_indices = torch.argsort(torch.tensor(idxs_seq))    #Gets the index that will be reordered back to the original order
-        return pred_all[original_order_indices], logits_dict, labels_dict                   
+        self._pred_dict_eval, self._labels_dict_eval = pred_dict, labels_dict
+        return pred_all[original_order_indices]   
+           

@@ -136,7 +136,7 @@ def get_eval_heads(head, zero_shot_weights, ratio_list=[0.5], logit=None):
     return eval_heads  # Return the dictionary containing the evaluation heads
 
 def get_eval_heads_new(model, args):
-    logit_head_main = model.classifier_main
+    logit_head_main = model.subclassifier_id_main
 
     eval_heads = {
         'head_main': logit_head_main.cuda().eval(),  # Create a dictionary with the original head model as the 'head' key
@@ -219,13 +219,15 @@ def train(logit_head, image_encoder, text_encoder,
             logits_t_dict, labels_t_dict = logit_head(feature_t, label_t)
             def get_loss(logits_dict, labels_dict):
                 loss = torch.empty(0).to(device)
-                # pred_list = {}
-                # labels_list = {}
+                pred_dict = {}
+                acc_dict = {}
                 for (model_id, logits), (model_id_, labels) in zip(logits_dict.items(), labels_dict.items()):
                     assert model_id == model_id_ and logits.shape[0] == labels.shape[0]
                     loss = torch.cat([loss, criterion(logits, labels).unsqueeze(0)], dim=0)
-                    # pred_list[model_id] = torch.argmax(logits, dim=1)
-                    # labels_list[model_id] = labels
+                    pred_dict[model_id] = torch.argmax(logits, dim=1)
+                    val_acc = torch.sum(pred_dict[model_id] == labels).item() / labels.shape[0]
+                    acc_dict[model_id] = val_acc
+
                 return loss.sum()
             loss = get_loss(logits_i_dict, labels_i_dict) + beta*get_loss(logits_t_dict, labels_t_dict)
             optimizer.zero_grad()
@@ -259,7 +261,7 @@ def train(logit_head, image_encoder, text_encoder,
             
 
 def validate(logit_head, image_encoder, val_loader, device="cuda"):
-    logits_dict_all = {}
+    pred_dict_all = {}
     labels_all = {} 
     with torch.no_grad():
         logit_head.eval()
@@ -271,33 +273,34 @@ def validate(logit_head, image_encoder, val_loader, device="cuda"):
             image = image.to(device)
             image_label = image_label.to(device)
             image_feature = image_encoder(image)
-            pred, logits_dict, index_dict = logit_head(image_feature)
+            pred = logit_head(image_feature)
             if pred.shape != image_label.shape:
                 pred = torch.argmax(pred, dim=1)
             
             # Store per batch logits and labels
-            for key in logits_dict.keys():               
-                if key not in logits_dict_all:
-                    logits_dict_all[key] = logits_dict[key].detach().cpu()
+            pred_dict, index_dict = logit_head._pred_dict_eval, logit_head._labels_dict_eval
+            for key in pred_dict.keys():               
+                if key not in pred_dict_all:
+                    pred_dict_all[key] = pred_dict[key].detach().cpu()
                     labels_all[key] = image_label.detach().cpu()[index_dict[key]]
                 else:
-                    logits_dict_all[key] = torch.cat([logits_dict_all[key], logits_dict[key].detach().cpu()])
+                    pred_dict_all[key] = torch.cat([pred_dict_all[key], pred_dict[key].detach().cpu()])
                     labels_all[key] = torch.cat([labels_all[key], image_label.detach().cpu()[index_dict[key]]])
             
             val_acc += torch.sum(pred == image_label).item()
             val_count += image_label.size(0)
-        val_acc /= val_count
-        print(f'\n total ACC: {val_acc}')
+        val_acc /= val_count                                    
+        print(f'\n total ACC: {val_acc:.4}', end='\t')          #---------
         # Accuracy per classifier
-        acc_dict = validate_sub_classifers(logits_dict_all, labels_all)
+        acc_dict = validate_sub_classifers(pred_dict_all, labels_all)
         for model_id, acc in acc_dict.items():
-            print(f'{model_id} ACC: {acc}')
+            print(f'{model_id} ACC: {acc:.4}', end='\t')        #---------
     return val_acc
 
-def validate_sub_classifers(logits_dict, labels):
+def validate_sub_classifers(pred_dict, labels):
     acc_dict = {}
-    for model_id, logits in logits_dict.items():
-        pred = torch.argmax(logits, dim=1)              #TODO debug here
+    for model_id, pred in pred_dict.items():
+        # pred = torch.argmax(pred, dim=1)              #TODO debug here
         acc = torch.sum(pred == labels[model_id]).item() / labels[model_id].size(0)
         # Store accuracy for this model_id
         acc_dict[model_id] = acc 
@@ -414,7 +417,7 @@ def main(args):
     # filter out invalid batch sizes
     VALID_BATCH_SIZES = get_valid_batch_sizes(hyperparams, text_dataset, image_train_dataset, modality=args.modality)
     if args.modality == "regularization":
-        beta_list = [0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8] 
+        beta_list = [0.0, 0.3, 0.4, 0.6, 1.0, 1.3] 
     else:
         beta_list = [-1]
     def get_experiment_count(hyperparams):
@@ -447,7 +450,7 @@ def main(args):
                             # test_result_dict = torch.load(test_result_path)
                             filename = test_result_path
                             with open(filename, 'r') as file:
-                                test_result_dict = json.load(test_result_path)
+                                test_result_dict = json.load(file)
                             continue
                         else:
                             print(f"Starting: {hyperparams_str} {cur_count}/{experiment_count}")
