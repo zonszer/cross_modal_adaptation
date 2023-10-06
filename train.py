@@ -215,21 +215,25 @@ def train(logit_head, image_encoder, text_encoder,
             raise ValueError("Both image_feature and text_feature are None")
 
         if args.modality == "regularization":
-            logits_i_dict, labels_i_dict = logit_head(feature_i, label_i)
-            logits_t_dict, labels_t_dict = logit_head(feature_t, label_t)
-            def get_loss(logits_dict, labels_dict):
-                loss = torch.empty(0).to(device)
-                pred_dict = {}
-                acc_dict = {}
-                for (model_id, logits), (model_id_, labels) in zip(logits_dict.items(), labels_dict.items()):
-                    assert model_id == model_id_ and logits.shape[0] == labels.shape[0]
-                    loss = torch.cat([loss, criterion(logits, labels).unsqueeze(0)], dim=0)
-                    pred_dict[model_id] = torch.argmax(logits, dim=1)
-                    val_acc = torch.sum(pred_dict[model_id] == labels).item() / labels.shape[0]
-                    acc_dict[model_id] = val_acc
+            # logits_i_dict, labels_i_dict = logit_head(feature_i, label_i)
+            # logits_t_dict, labels_t_dict = logit_head(feature_t, label_t)
+            # def get_loss(logits_dict, labels_dict):
+            #     loss = torch.empty(0).to(device)
+                # pred_dict = {}
+                # acc_dict = {}
+                # for (model_id, logits), (model_id_, labels) in zip(logits_dict.items(), labels_dict.items()):
+                #     assert model_id == model_id_ and logits.shape[0] == labels.shape[0]
+                    # loss = torch.cat([loss, criterion(logits, labels).unsqueeze(0)], dim=0)
+                    # pred_dict[model_id] = torch.argmax(logits, dim=1)
+                    # val_acc = torch.sum(pred_dict[model_id] == labels).item() / labels.shape[0]
+                    # acc_dict[model_id] = val_acc
 
-                return loss.sum()
-            loss = get_loss(logits_i_dict, labels_i_dict) + beta*get_loss(logits_t_dict, labels_t_dict)
+                # return loss.sum()
+            # loss = get_loss(logits_i_dict, labels_i_dict) + beta*get_loss(logits_t_dict, labels_t_dict)
+            logits_i, _ = logit_head(feature_i)
+            logits_t, _ = logit_head(feature_t)
+            loss = criterion(logits_i, label_i) + beta*criterion(logits_t, label_t)
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -266,35 +270,43 @@ def validate(logit_head, image_encoder, val_loader, device="cuda"):
     with torch.no_grad():
         logit_head.eval()
         image_encoder.eval()
-        val_acc = 0
-        val_count = 0.
+        val_acc = 0; val_acc_ = 0
+        val_count = 0.; 
         
         for image, image_label in val_loader:
             image = image.to(device)
             image_label = image_label.to(device)
             image_feature = image_encoder(image)
             pred = logit_head(image_feature)
+            pred_main = logit_head.prob_main if hasattr(logit_head, 'prob_main') else None
             if pred.shape != image_label.shape:
                 pred = torch.argmax(pred, dim=1)
+                pred_main = torch.argmax(logit_head.prob_main, dim=1) if hasattr(logit_head, 'prob_main') else None
             
-            # Store per batch logits and labels
-            pred_dict, index_dict = logit_head._pred_dict_eval, logit_head._labels_dict_eval
-            for key in pred_dict.keys():               
-                if key not in pred_dict_all:
-                    pred_dict_all[key] = pred_dict[key].detach().cpu()
-                    labels_all[key] = image_label.detach().cpu()[index_dict[key]]
-                else:
-                    pred_dict_all[key] = torch.cat([pred_dict_all[key], pred_dict[key].detach().cpu()])
-                    labels_all[key] = torch.cat([labels_all[key], image_label.detach().cpu()[index_dict[key]]])
+            # # Store per batch logits and labels
+            # pred_dict, index_dict = logit_head._pred_dict_eval, logit_head._labels_dict_eval
+            # for key in pred_dict.keys():               
+            #     if key not in pred_dict_all:
+            #         pred_dict_all[key] = pred_dict[key].detach().cpu()
+            #         labels_all[key] = image_label.detach().cpu()[index_dict[key]]
+            #     else:
+            #         pred_dict_all[key] = torch.cat([pred_dict_all[key], pred_dict[key].detach().cpu()])
+            #         labels_all[key] = torch.cat([labels_all[key], image_label.detach().cpu()[index_dict[key]]])
             
             val_acc += torch.sum(pred == image_label).item()
+            if hasattr(logit_head, 'prob_main'):
+                val_acc_ += torch.sum(pred_main == image_label).item()
             val_count += image_label.size(0)
-        val_acc /= val_count                                    
-        print(f'\n total ACC: {val_acc:.4}', end='\t')          #---------
-        # Accuracy per classifier
-        acc_dict = validate_sub_classifers(pred_dict_all, labels_all)
-        for model_id, acc in acc_dict.items():
-            print(f'{model_id} ACC: {acc:.4}', end='\t')        #---------
+        val_acc /= val_count
+        if hasattr(logit_head, 'prob_main'):
+            val_acc_ /= val_count 
+        print(f'\n pred ACC: {val_acc:.4}', end='\t')          #---------
+        if hasattr(logit_head, 'prob_main'):
+            print(f'pred_main ACC: {val_acc_:.4}', end='\t')     
+        # # Accuracy per classifier
+        # acc_dict = validate_sub_classifers(pred_dict_all, labels_all)
+        # for model_id, acc in acc_dict.items():
+        #     print(f'{model_id} ACC: {acc:.4}', end='\t')        #---------
     return val_acc
 
 def validate_sub_classifers(pred_dict, labels):
@@ -487,7 +499,7 @@ def main(args):
                             warmup_type=hyperparams['warmup_type'],
                             warmup_lr=hyperparams['warmup_min_lr']
                         )
-                        criterion = torch.nn.CrossEntropyLoss()
+                        criterion = torch.nn.NLLLoss()          #NLLLoss()    
 
                         if args.modality == "cross_modal":
                             text_batch_size = int(batch_size * CROSS_MODAL_BATCH_RATIO)

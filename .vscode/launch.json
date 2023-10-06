@@ -41,7 +41,7 @@
                 "CUDA_VISIBLE_DEVICES": "0"
                 },
             "args": [
-              "--id=debug_uni_strategy",
+              "--id=debug_10.5_unite-train",
               "--modality=regularization",   //regularization
               "--classifier_head=linear",
               "--classifier_init=zeroshot",

@@ -5,8 +5,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Step 1 & 2: Parse the hyperparameters from the filenames and store them in a dictionary
-folder_path = 'experiments/ucf101-shot_16-seed_1/RN50/regularization_text_0_hand_crafted-image_0_flip_view_1/linear_zeroshot/logit_4.60517/'
-# folder_path = 'experiments/ucf101-shot_16-seed_1/RN50/text_0_hand_crafted-image_0_flip_view_1/linear_zeroshot/logit_4.60517/'   #normal cross-modal training
+# folder_path = 'experiments/ucf101-shot_16-seed_1/RN50/regularization_text_0_hand_crafted-image_0_flip_view_1/linear_zeroshot/logit_4.60517/'    #regularization_ with beta
+folder_path = 'experiments/ucf101-shot_16-seed_1/RN50/text_0_hand_crafted-image_0_flip_view_1/linear_zeroshot/logit_4.60517/'   #normal cross-modal training
 json_files_path = [os.path.join(folder_path, dir, dir + '.json') for dir in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, dir))]
 json_files_names = [os.path.basename(file) for file in json_files_path]
 
@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 #----------------------settings----------------------
 # Select the rows where beta == 1.5 and bs == 32
-selected_rows = df[df['beta'] == 1.5]   #(df['beta'] == 1.5) & (df['bs'] == 32) & (df['lr'] == 0.0001) & (df['wd'] == 0.01) 
+selected_rows = df[(df['bs'] == 32) & (df['lr'] == 0.0001)]   #(df['beta'] == 1.5) & (df['bs'] == 32) & (df['lr'] == 0.0001) & (df['wd'] == 0.01) 
 # Step 5: Group the DataFrame by the hyperparameter and calculate the mean of the performance metric
 grouped_var = 'wd'
 # compar_var = 'head_wiseft_0.5'

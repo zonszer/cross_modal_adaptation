@@ -375,7 +375,7 @@ class MultiClassifier(nn.Module):
         logits_dict['main'], labels_dict['main'] = x_logits, self.map_labels(model_id='main', lb=labels)
         return logits_dict, labels_dict
 
-    def forward_train(self, x, labels, idxs):
+    def forward_train_(self, x, labels, idxs):
         # init local variables:
         logits_dict = {}    # dict to hold the logits for each classifier
         labels_dict = {}    # dict to hold the mapped labels for each classifier
@@ -394,7 +394,28 @@ class MultiClassifier(nn.Module):
                 logits_dict[model_id] = x_logits
                 labels_dict[model_id] = self.map_labels(model_id=model_id, lb=labels[x_idxs])
             return logits_dict, labels_dict
-
+        
+    def forward_train(self, x, labels, idxs):
+        prob_sub_all = torch.empty(0).to(self.args.device)
+        prob_all = {}
+        # dicts = self._forward_train_mainclsf(x)
+        for model_id, model in self.model_instance_dict.items():        
+            x_logits = model(x) 
+            prob = F.softmax(x_logits, dim=1)
+            prob_all[model_id] = prob
+            if model_id != 'main':
+                prob_sub_all = torch.cat([prob_sub_all, prob / self.num_classifier], dim=1) #TODO change the weigt
+            # pred = torch.argmax(prob, dim=1)
+            # pred = self.map_labels_re(model_id=model_id, lb=pred)
+            # pred_all = torch.cat([pred_all, pred], dim=0)
+            # idxs_seq.extend(x_idxs)
+            # labels_dict[model_id] = x_idxs
+            # pred_dict[model_id] = pred
+        # original_order_indices = torch.argsort(torch.tensor(idxs_seq))    #Gets the index that will be reordered back to the original order
+        # self._pred_dict_eval, self._labels_dict_eval = pred_dict, labels_dict
+        prob_final = prob_all['main'] * 0.5 + prob_sub_all * 0.5
+        self.prob_main = prob_all['main']
+        return torch.log(prob_final), None
 
     def _select_topsim_cls(self, bs, x_logits):
         '''
@@ -416,7 +437,7 @@ class MultiClassifier(nn.Module):
                 xmapping[x_idx] = 'main'
         return xmapping
 
-    def forward_eval(self, x):
+    def forward_eval_(self, x):
         ''' when has no labels and idxs, forward the main classifier, then according to the x_logits 
         to select the sub-classifier, then forward the sub-classifier to predict the labels
         '''
@@ -441,3 +462,34 @@ class MultiClassifier(nn.Module):
         self._pred_dict_eval, self._labels_dict_eval = pred_dict, labels_dict
         return pred_all[original_order_indices]   
            
+    def forward_eval(self, x):     #classifiers分开训练但是共同推理的模式
+        ''' when has no labels and idxs, forward the main classifier, then according to the x_logits 
+        to select the sub-classifier, then forward the sub-classifier to predict the labels
+        '''
+        # pred_dict = {}    # dict to hold the logits for each classifier
+        # labels_dict = {}    # dict to hold the seq index
+        # idxs_seq = []
+        prob_sub_all = torch.empty(0).to(self.args.device)
+        prob_all = {}
+        # dicts = self._forward_train_mainclsf(x)
+
+        # xmapping_dict = self._select_topsim_cls(x.shape[0], dicts[0]['main'])
+        # x_idxs_dict = self._collect_samemapping(xmapping_dict)      #x_idxs_dict has 'main'
+
+        for model_id, model in self.model_instance_dict.items():        
+            x_logits = model(x) 
+            prob = F.softmax(x_logits, dim=1)
+            prob_all[model_id] = prob
+            if model_id != 'main':
+                prob_sub_all = torch.cat([prob_sub_all, prob / self.num_classifier], dim=1) #TODO change the weigt
+            # pred = torch.argmax(prob, dim=1)
+            # pred = self.map_labels_re(model_id=model_id, lb=pred)
+            # pred_all = torch.cat([pred_all, pred], dim=0)
+            # idxs_seq.extend(x_idxs)
+            # labels_dict[model_id] = x_idxs
+            # pred_dict[model_id] = pred
+        # original_order_indices = torch.argsort(torch.tensor(idxs_seq))    #Gets the index that will be reordered back to the original order
+        # self._pred_dict_eval, self._labels_dict_eval = pred_dict, labels_dict
+        prob_final = prob_all['main'] * 0.5 + prob_sub_all * 0.5
+        self.prob_main = prob_all['main']
+        return torch.log(prob_final)
